@@ -89,6 +89,7 @@ function platformSettings() {
 }
 
 function androidBack() {
+  if (S.shutdown) return false;
   if ($('#modal').innerHTML) { closeModal(); return true; }
   if (S.chatListOpen) { S.chatListOpen = false; renderChatHead(); return true; }
   if (S.chatOpen && matchMedia('(max-width: 900px)').matches) { toggleChat(); return true; }

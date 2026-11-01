@@ -4,6 +4,7 @@ import os
 import signal
 import shutil
 import subprocess
+import runtime
 import sys
 import threading
 import time
@@ -135,7 +136,7 @@ class Telegram:
                 job.write_text(json.dumps(part, ensure_ascii=False), encoding="utf-8")
             if self.cancelled or self.stopping():
                 return {"status": "error", "error": "Операция отменена."}
-            self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            self.process = runtime.popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                             creationflags=NO_WINDOW, start_new_session=os.name != "nt")
             started = True
             out, _ = self.process.communicate(timeout=330)

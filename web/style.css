@@ -1,3 +1,8 @@
+#shutdownScreen { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 24px; background: var(--bg); overflow: auto; }
+.shutdown-card { width: min(100%, 540px); padding: clamp(24px, 5vw, 48px); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+.shutdown-card h1 { font-size: clamp(26px, 5vw, 34px); line-height: 1.15; }
+.shutdown-card p { line-height: 1.6; }
+
 :root {
   --bg: #f4f3ef;
   --panel: #ffffff;

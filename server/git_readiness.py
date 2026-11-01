@@ -2,6 +2,7 @@
 import os
 import re
 import subprocess
+import runtime
 from urllib.parse import urlsplit
 
 
@@ -12,7 +13,7 @@ class CheckError(Exception):
 def run(cwd, *args, discard=False):
     """Только чтение; сырой вывод ошибок и gh никогда не уходит клиенту или в лог."""
     try:
-        result = subprocess.run(args, cwd=cwd, stdin=subprocess.DEVNULL,
+        result = runtime.run(args, cwd=cwd, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL if discard else subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace", timeout=8,
                                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never",
@@ -24,6 +25,8 @@ def run(cwd, *args, discard=False):
         raise CheckError("Проверка не ответила за 8 секунд. Повтори позже.") from None
     except OSError:
         raise CheckError("Не удалось запустить проверку. Проверь доступность папки проекта.") from None
+    except RuntimeError:
+        raise CheckError("Сервер останавливается. Проверка отменена.") from None
     return result.returncode, (result.stdout or "").strip()
 
 

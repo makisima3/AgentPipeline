@@ -3,6 +3,9 @@ import atexit
 import os
 import sys
 import time
+import signal
+import subprocess
+import threading
 from pathlib import Path
 
 AGENT = os.environ.get("PIPELINE_AGENT", "claude").lower()
@@ -13,6 +16,56 @@ if AGENT not in ("claude", "codex"):
 os.environ["PIPELINE_AGENT"] = AGENT
 NAME = "Codex" if AGENT == "codex" else "Claude"
 _instance = None
+stopping = threading.Event()
+launch_lock = threading.RLock()
+processes = set()
+
+
+def popen(*args, **kwargs):
+    """Запуск под общим затвором остановки, включая служебные процессы."""
+    with launch_lock:
+        if stopping.is_set():
+            raise RuntimeError("Сервер останавливается")
+        if os.name != "nt":
+            kwargs["start_new_session"] = True
+        proc = subprocess.Popen(*args, **kwargs)
+        processes.difference_update(p for p in tuple(processes) if p.poll() is not None)
+        processes.add(proc)
+        return proc
+
+
+def kill_process(proc):
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    proc.wait(timeout=10)
+
+
+def run(args, *, input=None, capture_output=False, timeout=None, **kwargs):
+    """Аналог subprocess.run для отменяемой служебной работы."""
+    if input is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    if capture_output:
+        kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = popen(args, **kwargs)
+    try:
+        out, err = proc.communicate(input, timeout=timeout)
+        return subprocess.CompletedProcess(args, proc.returncode, out, err)
+    except BaseException:
+        kill_process(proc)
+        proc.communicate()
+        raise
+    finally:
+        with launch_lock:
+            processes.discard(proc)
 
 
 def acquire():

@@ -1,4 +1,4 @@
-"""Настоящий APK 1.0, демо-сервер и системный ввод; только изолированный эмулятор."""
+"""Установленный APK, демо-сервер и системный ввод; только изолированный эмулятор."""
 import argparse
 import json
 import re
@@ -174,7 +174,10 @@ def main():
     adb('shell', 'am', 'force-stop', pkg)
     adb('shell', 'am', 'start', '-n', pkg + '/.MainActivity')
     wait_node('Результат и отчёт')
-    evidence = {'android': adb('shell', 'getprop', 'ro.build.version.release'), 'apk': '1.0 (versionCode 1)',
+    package_info = adb('shell', 'dumpsys', 'package', pkg)
+    version = re.search(r'versionName=(\S+)', package_info).group(1)
+    code = re.search(r'versionCode=(\d+)', package_info).group(1)
+    evidence = {'android': adb('shell', 'getprop', 'ro.build.version.release'), 'apk': f'{version} (versionCode {code})',
                 'result_id': r['id'], 'task_id': r['source_task_id'], 'no_agent_on_attach': True,
                 'keyboard_and_back': True, 'draft_reload': True, 'structured_message': True,
                 'native_file_picker_and_persistent_file': True,

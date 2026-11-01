@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import runtime
 from pathlib import Path
 
 from db import DATA
@@ -99,7 +100,7 @@ class ClaudeRun:
         for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"):
             env.pop(k, None)
         env["MCP_TOOL_TIMEOUT"] = str(7 * 24 * 3600 * 1000)  # ожидание разрешения может быть долгим
-        self.proc = subprocess.Popen(self.command(), cwd=self.cwd, env=env, stdin=subprocess.PIPE,
+        self.proc = runtime.popen(self.command(), cwd=self.cwd, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
         try:
             self.proc.stdin.write(self.prompt.encode("utf-8"))

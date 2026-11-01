@@ -2,6 +2,7 @@
 import os
 import re
 import subprocess
+import runtime
 import threading
 import time
 
@@ -34,7 +35,7 @@ class GitError(Exception):
 def git(*args, timeout=20):
     """Вызов git в папке трекера без окна и без вопросов; ошибка — GitError с понятным текстом."""
     try:
-        r = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=db.ROOT, capture_output=True,
+        r = runtime.run(["git", "-c", "core.quotepath=off", *args], cwd=db.ROOT, capture_output=True,
                            encoding="utf-8", errors="replace", timeout=timeout, env=GIT_ENV, creationflags=NO_WINDOW)
     except FileNotFoundError:
         raise GitError("git не найден (нужен в PATH)")
@@ -70,7 +71,7 @@ class Updater:
     def loop(self):
         """Проверка при старте и потом раз в update_check_minutes (0 — только вручную)."""
         last = 0
-        while True:
+        while not runtime.stopping.is_set():
             try:
                 minutes = float(db.get_setting("update_check_minutes") or 0)
             except ValueError:

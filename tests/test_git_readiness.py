@@ -27,7 +27,7 @@ class ReadinessTests(unittest.TestCase):
         self.helper = "!gh auth git-credential"
         self.repository = True
         self.calls = []
-        self.patcher = patch.object(gr.subprocess, "run", side_effect=self.command)
+        self.patcher = patch.object(gr.runtime, "run", side_effect=self.command)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
@@ -172,13 +172,13 @@ class ReadinessTests(unittest.TestCase):
                 raise FileNotFoundError()
             return original(args, **kwargs)
 
-        with patch.object(gr.subprocess, "run", side_effect=missing_gh):
+        with patch.object(gr.runtime, "run", side_effect=missing_gh):
             self.assertEqual(self.result(auth="gh")["status"], "needs_setup")
-        with patch.object(gr.subprocess, "run", side_effect=subprocess.TimeoutExpired("SECRET", 8, output="SECRET")):
+        with patch.object(gr.runtime, "run", side_effect=subprocess.TimeoutExpired("SECRET", 8, output="SECRET")):
             r = self.result()
             self.assertEqual(r["status"], "needs_setup")
             self.assertNotIn("SECRET", json.dumps(r))
-        with patch.object(gr.subprocess, "run", return_value=subprocess.CompletedProcess([], 128, stdout="SECRET", stderr="SECRET")):
+        with patch.object(gr.runtime, "run", return_value=subprocess.CompletedProcess([], 128, stdout="SECRET", stderr="SECRET")):
             self.assertNotIn("SECRET", json.dumps(self.result()))
 
     def test_multiple_pushurls_and_url_remote_need_review(self):

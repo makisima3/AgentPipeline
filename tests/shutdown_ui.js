@@ -1,0 +1,70 @@
+async (page) => {
+  const base = new URL(page.url()).origin;
+  const assert = (ok, message) => { if (!ok) throw new Error(message); };
+  const checks = {}, errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const output = 'output/playwright/task-47/';
+  await page.setViewportSize({width: 1280, height: 900});
+  await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+  await page.locator('#stopServer').scrollIntoViewIfNeeded();
+  await page.screenshot({path: output + 'settings-1280.png'});
+  await page.locator('#stopServer').click();
+  await page.screenshot({path: output + 'confirm-1280.png'});
+  await page.getByRole('button', {name: 'Отмена', exact: true}).click();
+  assert((await (await page.request.get(base + '/api/shutdown')).json()).status === 'running', 'Отмена выключила сервер');
+  checks.cancel = true;
+  await page.setViewportSize({width: 390, height: 844});
+  if (await page.locator('#chat').isVisible()) await page.locator('#chat .chat-head').getByRole('button', {name: '✕', exact: true}).click();
+  await page.locator('#stopServer').scrollIntoViewIfNeeded();
+  await page.screenshot({path: output + 'settings-390.png'});
+  await page.locator('#stopServer').click();
+  await page.screenshot({path: output + 'confirm-390.png'});
+  assert(await page.locator('#confirmStop').isVisible(), 'Подтверждение недоступно на телефоне');
+  await page.route('**/api/shutdown', async route => {
+    if (route.request().method() === 'POST') await route.fulfill({status: 503, contentType: 'application/json', body: JSON.stringify({error: 'Демо: команда не принята'})});
+    else await route.continue();
+  });
+  await page.locator('#confirmStop').click();
+  await page.getByText(/Остановка не принята/).waitFor();
+  assert(await page.locator('#shutdownScreen').count() === 0, 'Ложное подтверждение при HTTP 503');
+  await page.screenshot({path: output + 'rejected-390.png'});
+  checks.rejected = true;
+  await page.unroute('**/api/shutdown');
+  await page.route('**/api/shutdown', route => route.abort('failed'));
+  await page.locator('#confirmStop').click();
+  await page.getByRole('heading', {name: 'Остановка не подтверждена'}).waitFor();
+  await page.screenshot({path: output + 'uncertain-390.png'});
+  assert((await (await page.request.get(base + '/api/shutdown')).json()).status === 'running', 'Сетевая заглушка выключила сервер');
+  checks.networkUnknown = true;
+  await page.unroute('**/api/shutdown');
+  await page.reload();
+  await page.locator('#stopServer').waitFor();
+  // Несколько записей истории у обычной вкладки: настоящий запрет window.close в Chromium.
+  await page.evaluate(() => { history.pushState({}, '', '/?test=one'); history.pushState({}, '', '/?test=two'); });
+  const peer = await page.context().newPage();
+  await peer.goto(base);
+  await page.request.post(base + '/api/demo/work', {data: {}});
+  await page.route('**/api/shutdown', async route => {
+    if (route.request().method() === 'POST') { await route.fetch(); await route.abort('failed'); }
+    else await route.continue();
+  });
+  await page.locator('#stopServer').click();
+  await page.locator('#confirmStop').click();
+  await page.getByRole('heading', {name: 'Сервер остановлен', exact: true}).waitFor({timeout: 30000});
+  await peer.getByRole('heading', {name: 'Сервер остановлен', exact: true}).waitFor({timeout: 30000});
+  assert(!page.isClosed(), 'Нужен сценарий запрета закрытия');
+  await page.screenshot({path: output + 'stopped-390.png'});
+  await page.setViewportSize({width: 1280, height: 900});
+  await page.screenshot({path: output + 'stopped-1280.png'});
+  checks.activeStop = checks.remoteDeviceScreen = checks.browserCloseDenied = true;
+  checks.acceptedReplyLostAndRecovered = true;
+  let requests = 0;
+  page.on('request', req => { if (req.url().includes('/api/')) requests++; });
+  await page.waitForTimeout(21500);
+  assert(requests === 0, 'Продолжается автоматическое переподключение');
+  assert(await page.locator('#offline').isHidden(), 'Бесконечная плашка переподключения');
+  assert(errors.length === 0, 'Ошибки JS: ' + errors.join('; '));
+  checks.noReconnect = true;
+  await peer.close();
+  return {checks, errors};
+}

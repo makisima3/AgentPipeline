@@ -82,7 +82,12 @@ public class MainActivity extends Activity {
         web = new WebView(this); WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setAllowFileAccess(false); s.setAllowContentAccess(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW); s.setSupportMultipleWindows(true); s.setMediaPlaybackRequiresUserGesture(true);
-        web.addJavascriptInterface(new Object() { @JavascriptInterface public void settings() { runOnUiThread(() -> MainActivity.this.settings()); } }, "AgentPipelineAndroid");
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface public void settings() { runOnUiThread(() -> MainActivity.this.settings()); }
+            @JavascriptInterface public void closeWindow() { runOnUiThread(() -> {
+                if (web != null && sameOrigin(web.getUrl())) finishAndRemoveTask();
+            }); }
+        }, "AgentPipelineAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { return navigate(request.getUrl().toString()); }
             @Override public void onPageFinished(WebView v, String url) { state.setText(Uri.parse(url).getAuthority()); }

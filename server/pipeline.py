@@ -3,7 +3,6 @@ import json
 import queue
 import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
@@ -12,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import db
+import runtime
 import results
 import discussions
 from runner import CLAUDE, NO_WINDOW, ClaudeRun, short_tool
@@ -282,7 +282,7 @@ class Orchestrator:
         hub.send("state", state=self.state())
 
     def loop(self):
-        while True:
+        while not runtime.stopping.is_set():
             try:
                 restart.check()
                 self.tick()
@@ -296,7 +296,7 @@ class Orchestrator:
             db.set_setting("pipeline_enabled", "0")
             hub.send("state", state=self.state())
             return
-        if enabled != "1" or restart.since:  # перед перезапуском новые задачи не берём
+        if enabled != "1" or restart.since or runtime.stopping.is_set():
             return
         pause = float(db.get_setting("pause_until") or 0)
         if pause > time.time():
@@ -305,6 +305,8 @@ class Orchestrator:
             db.set_setting("pause_until", "0")
             hub.send("state", state=self.state())
         with self.lock:
+            if runtime.stopping.is_set():
+                return
             free = int(db.get_setting("max_parallel") or 1) - len(self.runs)
             if free <= 0:
                 return
@@ -324,6 +326,8 @@ class Orchestrator:
                 free -= 1
 
     def start_task(self, t):
+        if runtime.stopping.is_set():
+            return
         t = db.get_task(t["id"])
         project = db.one("SELECT * FROM projects WHERE id=?", (t["project_id"],))
         if not Path(project["path"]).is_dir():
@@ -595,7 +599,7 @@ class Chat:
 
     def send(self, cid, text, attachments=None, telegram_notify=False, task_context=None, client_request_id=None):
         """attachments — уже сохранённые файлы: [{name, file, size, type}] в db.chat_dir(pid, cid)."""
-        if cid in self.runs or restart.since:
+        if cid in self.runs or restart.since or runtime.stopping.is_set():
             return False
         c = db.get_chat(cid)
         pid = c["project_id"]
@@ -726,6 +730,8 @@ class Titler:
         return cid in self.pending
 
     def request(self, cid):
+        if runtime.stopping.is_set():
+            return
         with self.lock:
             if cid in self.pending:
                 return
@@ -735,7 +741,7 @@ class Titler:
 
     def loop(self):
         self._backfill()
-        while True:
+        while not runtime.stopping.is_set():
             cid = self.qu.get()
             try:
                 self._make(cid)
@@ -802,7 +808,7 @@ class Titler:
             return title[:TITLE_LEN]
         cmd = [CLAUDE, "-p", "--output-format", "json", "--strict-mcp-config", "--no-session-persistence",
                "--model", "haiku", "--tools", "", "--setting-sources", "", "--system-prompt", TITLE_SYSTEM]
-        r = subprocess.run(cmd, input=f"Начало разговора:\n\n{text}".encode("utf-8"), capture_output=True,
+        r = runtime.run(cmd, input=f"Начало разговора:\n\n{text}".encode("utf-8"), capture_output=True,
                            cwd=tempfile.gettempdir(), timeout=TITLE_TIMEOUT, creationflags=NO_WINDOW)
         try:
             out = json.loads(r.stdout.decode("utf-8", errors="replace") or "{}")
@@ -852,13 +858,15 @@ class Restart:
         return {"since": self.since, "busy": len(active_runs())} if self.since else None
 
     def request(self, by):
+        if runtime.stopping.is_set():
+            return
         if not self.since:
             self.since = time.time()
             log_restart(f"запрошен ({by}), выполняется запусков: {len(orch.runs)}, чатов: {len(chat.runs)}")
         hub.send("state", state=orch.state())
 
     def check(self):
-        if not self.since or self.exiting:
+        if not self.since or self.exiting or runtime.stopping.is_set():
             return
         busy = active_runs
         if busy() and time.time() - self.since < RESTART_TIMEOUT:
@@ -1076,7 +1084,7 @@ def import_parse(pid, text):
            "--json-schema", json.dumps(IMPORT_SCHEMA)]
     if s["chat_model"] or s["model"]:
         cmd += ["--model", s["chat_model"] or s["model"]]
-    r = subprocess.run(cmd, input=IMPORT_PROMPT.format(text=text).encode("utf-8"), capture_output=True,
+    r = runtime.run(cmd, input=IMPORT_PROMPT.format(text=text).encode("utf-8"), capture_output=True,
                        cwd=cwd, timeout=600, creationflags=NO_WINDOW)
     out = json.loads(r.stdout.decode("utf-8", errors="replace") or "{}")
     data = out.get("structured_output")

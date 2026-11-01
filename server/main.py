@@ -101,6 +101,7 @@ def api_result_file(h, body, query, rid, index):
 def api_state(h, body, query):
     return {
         "boot_id": pl.BOOT_ID,
+        "shutdown": shutdown.state,
         "installation_id": results.installation_id(),
         "agent": runtime.AGENT,
         "agent_name": runtime.NAME,
@@ -124,6 +125,25 @@ def api_pipeline(h, body, query):
 def api_restart(h, body, query):
     pl.restart.request("кнопка в настройках")
     return pl.orch.state()
+
+
+@route("GET", "/api/shutdown")
+def api_shutdown_state(h, body, query):
+    return {"status": shutdown.state, "boot_id": pl.BOOT_ID}
+
+
+@route("POST", "/api/shutdown")
+def api_shutdown(h, body, query):
+    # Та же локальная модель доступа; нестандартный заголовок исключает межсайтовую форму/CSRF.
+    need(h.headers.get("X-AgentPipeline-Stop") == pl.BOOT_ID, "Обновите страницу перед остановкой", 403)
+    origin = h.headers.get("Origin")
+    source = urlparse(origin or "")
+    need(not origin or (source.scheme in ("http", "https") and source.netloc == h.headers.get("Host", "")
+                        and not source.path and not source.query and not source.fragment),
+         "Команда доступна только из интерфейса трекера", 403)
+    need(body.get("confirm") is True, "Подтвердите остановку сервера", 400)
+    shutdown.request()
+    return api_shutdown_state(h, body, query)
 
 
 @route("GET", "/api/update")
@@ -659,7 +679,7 @@ def api_telegram_retry(h, body, query, tid):
 def api_pick_folder(h, body, query):
     code = ("import tkinter as t, tkinter.filedialog as f; r=t.Tk(); r.withdraw(); r.attributes('-topmost', True); "
             "print(f.askdirectory(title='Папка проекта') or '')")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8")
+    out = runtime.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
     return {"path": str(Path(out.stdout.strip())) if out.stdout.strip() else ""}
 
 
@@ -773,6 +793,9 @@ class Handler(BaseHTTPRequestHandler):
             hello = json.dumps({"type": "hello", "boot_id": pl.BOOT_ID})
             self.wfile.write(f"retry: 2000\ndata: {hello}\n\n".encode("utf-8"))
             self.wfile.flush()
+            if shutdown.state != "running":
+                self.wfile.write(("data: " + json.dumps({"type": "shutdown", "status": shutdown.state}) + "\n\n").encode())
+                self.wfile.flush()
             while not getattr(qu, "lost", False):
                 try:
                     msg = qu.get(timeout=15)
@@ -804,8 +827,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "bad json"}, 400)
         for m, rx, fn in ROUTES:
             if m == method and (mt := rx.match(url.path)):
+                action = method != "GET" and url.path != "/api/shutdown"
                 try:
-                    res = fn(self, body, parse_qs(url.query), *[int(g) for g in mt.groups()])
+                    with shutdown.actions:
+                        if action and runtime.stopping.is_set():
+                            raise HttpError(409, "Сервер останавливается — новые действия недоступны")
+                        if action:
+                            shutdown.active_actions += 1
+                    try:
+                        res = fn(self, body, parse_qs(url.query), *[int(g) for g in mt.groups()])
+                    finally:
+                        if action:
+                            with shutdown.actions:
+                                shutdown.active_actions -= 1
                     if res is not None:
                         self.send_json(res)
                 except HttpError as e:
@@ -834,6 +868,65 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     # SO_REUSEADDR в Windows позволяет второму процессу занять уже слушаемый порт — там он не нужен
     allow_reuse_address = os.name != "nt"
+
+
+class Shutdown:
+    """Остановка без преемника; статус stopped отправляется после завершения работы."""
+    def __init__(self):
+        self.state = "running"
+        self.server = None
+        self.lock = threading.Lock()
+        self.actions = threading.RLock()
+        self.active_actions = 0
+
+    def request(self):
+        with self.lock, pl.orch.lock, pl.chat.lock, runtime.launch_lock, self.actions:
+            if self.state in ("stopping", "stopped"):
+                return
+            need(not pl.restart.exiting, "Перезапуск уже начался. Дождитесь новой страницы", 409)
+            need(self.server is not None, "Остановка ещё недоступна", 503)
+            runtime.stopping.set()
+            self.state = "stopping"
+            pl.restart.since = None
+            db.set_setting("pipeline_enabled", "0")
+            pl.orch.manual_stops.update(pl.orch.runs)
+            pl.hub.send("shutdown", status=self.state)
+            threading.Thread(target=self._stop, daemon=True).start()
+
+    def _stop(self):
+        try:
+            runs = pl.active_runs()
+            for run in runs:
+                try:
+                    run.kill()
+                except Exception:
+                    pass  # всё равно пробуем остальные деревья из общего реестра
+            # Общий реестр покрывает также импорт, автоназвания, git и окна запуска Rpc.
+            with runtime.launch_lock:
+                processes = list(runtime.processes)
+            for proc in processes:
+                try:
+                    runtime.kill_process(proc)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            deadline = time.monotonic() + 20
+            while (pl.active_runs() or self.active_actions) and time.monotonic() < deadline:
+                time.sleep(.05)
+            need(not pl.active_runs() and not self.active_actions and all(p.poll() is not None for p in processes),
+                 "Не удалось дождаться завершения работы", 500)
+            with db._lock:
+                db._conn.execute("PRAGMA wal_checkpoint(FULL)")
+            self.state = "stopped"
+            pl.hub.send("shutdown", status=self.state)
+            time.sleep(1)  # квитанция HTTP и итоговое SSE другим устройствам
+            self.server.shutdown()
+        except Exception:
+            self.state = "error"
+            print("[shutdown] Не удалось подтвердить завершение работы; HTTP оставлен для диагностики")
+            pl.hub.send("shutdown", status=self.state)
+
+
+shutdown = Shutdown()
 
 
 def spawn_successor():
@@ -896,7 +989,7 @@ def main():
     pl.preflight()
     pl.orch.recover()
     telegram.change = pl.changed
-    telegram.stopping = lambda: bool(pl.restart.since)
+    telegram.stopping = lambda: bool(pl.restart.since) or runtime.stopping.is_set()
     telegram.running_tasks = lambda: set(pl.orch.runs)
     telegram.recover()
     results.recover()
@@ -912,14 +1005,22 @@ def main():
         webbrowser.open(url)
 
     def restart_exit():
-        p = spawn_successor()
+        with runtime.launch_lock:
+            if runtime.stopping.is_set():
+                return
+            p = spawn_successor()
         pl.log_restart(f"запущен новый экземпляр (pid {p.pid}), этот завершается")
         srv.shutdown()  # serve_forever в главном потоке вернётся, процесс выйдет
 
     pl.restart.exit = restart_exit
+    shutdown.server = srv
     try:
         srv.serve_forever()
         srv.server_close()
+        with db._lock:
+            db._conn.close()
+        if runtime._instance:
+            runtime._instance.close()
         os._exit(0)  # не ждать потоков SSE и чтения
     except KeyboardInterrupt:
         print("Останавливаю...")

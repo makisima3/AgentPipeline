@@ -46,6 +46,7 @@ const S = {
 };
 
 async function api(method, url, body) {
+  if (S.shutdown) throw new Error("Соединение завершено после команды остановки");
   const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { toast(d.error || `Ошибка ${r.status}`); throw Object.assign(new Error(d.error), { status: r.status }); }
@@ -297,7 +298,7 @@ function modal(html, cls = "") {
   $("#modal").innerHTML = `<div class="overlay" onmousedown="if(event.target===this)App.closeModal()"><div class="modal ${cls}">${html}</div></div>`;
 }
 
-function closeModal() { $("#modal").innerHTML = ""; S.task = null; }
+function closeModal() { if (S.stopRequest && !S.shutdown) return; $("#modal").innerHTML = ""; S.task = null; }
 
 function newTask(columnId) {
   const cols = S.board.columns.filter(c => !["progress", "waiting", "done"].includes(c.kind));
@@ -686,6 +687,8 @@ function renderSettings() {
       <p>${S.state.pipeline.restart
         ? `<span class="muted">Перезапуск запрошен${S.state.pipeline.restart.busy ? `, ждёт завершения запусков: ${S.state.pipeline.restart.busy}` : "…"}</span>`
         : `<button onclick="App.restartTracker()">Перезапустить трекер</button>`}</p>
+      <p><button class="danger" id="stopServer" onclick="App.stopServer()">Остановить сервер</button></p>
+      <div class="hint">Выключит сервер для всех устройств и прервёт текущие задачи и чаты. Для продолжения понадобится запустить сервер вручную.</div>
     </div>
     ${p ? `<div class="section"><h3>Проект «${esc(p.name)}»</h3>
       <label>Название</label><input id="ps-name" value="${esc(p.name)}">
@@ -815,6 +818,94 @@ async function restartTracker() {
   S.state.pipeline = await api("POST", "/api/restart");
   renderHeader(); if (S.view === "settings") renderSettings();
   toast(S.state.pipeline.restart?.busy ? "Перезапущу, когда доработают текущие запуски" : "Перезапускаю…");
+}
+
+function stopServer() {
+  if (S.shutdown || S.stopRequest) return;
+  modal(`<h3>Остановить сервер?</h3><p>AgentPipeline станет недоступен на всех подключённых устройствах. Текущие задачи и ответы чатов будут прерваны. Сохранённые результаты останутся.</p>
+    <p>Сервер нужно будет запустить вручную. Пайплайн останется выключенным.</p>
+    <p class="hint">Попробуем закрыть эту вкладку или экран приложения. Если браузер запретит закрытие, появится экран завершения.</p>
+    <p id="stopError" role="alert"></p><div class="actions"><button onclick="App.closeModal()">Отмена</button>
+    <button class="danger" id="confirmStop" onclick="App.confirmStopServer()">Остановить сервер</button></div>`);
+  $('#modal .modal').setAttribute('role', 'dialog');
+  $('#modal .modal').setAttribute('aria-modal', 'true');
+  $('#modal .modal').setAttribute('aria-label', 'Остановить сервер?');
+  $('#modal button').focus();
+}
+
+async function confirmStopServer() {
+  if (S.stopRequest || S.shutdown) return;
+  S.stopRequest = true; S.shutdownClose = true;
+  const controls = [...document.querySelectorAll('#modal button')];
+  controls.forEach(el => el.disabled = true);
+  try {
+    const r = await fetch('/api/shutdown', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-AgentPipeline-Stop': S.bootId},
+      body: JSON.stringify({confirm: true}), signal: AbortSignal.timeout(8000)});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Команда отклонена сервером');
+    monitorShutdown(d.status);
+  } catch (e) {
+    if (S.shutdown) return;
+    try {
+      const r = await fetch('/api/shutdown', {signal: AbortSignal.timeout(3000)});
+      if (!r.ok) throw new Error();
+      const d = await r.json();
+      if (d.boot_id === S.bootId && d.status !== 'running') return monitorShutdown(d.status);
+      $("#stopError").textContent = 'Остановка не принята: ' + e.message + '. Можно повторить.';
+    } catch {
+      monitorShutdown('unknown');
+    }
+    S.shutdownClose = false;
+  } finally {
+    S.stopRequest = false;
+    controls.forEach(el => el.disabled = false);
+  }
+}
+
+function shutdownScreen(status) {
+  S.shutdown = status;
+  eventStream?.close();
+  clearTimeout(telegramPoll);
+  closeModal(); setOffline(false);
+  let panel = $('#shutdownScreen');
+  if (!panel) {
+    panel = document.createElement('div'); panel.id = 'shutdownScreen'; panel.setAttribute('role', 'alert'); panel.tabIndex = -1;
+    document.body.appendChild(panel);
+    [...document.body.children].filter(el => el !== panel).forEach(el => el.inert = true);
+    panel.focus();
+  }
+  const done = status === 'stopped', waiting = status === 'stopping';
+  panel.innerHTML = `<div class="shutdown-card"><span class="mark">≡</span><p class="muted">AgentPipeline</p>
+    <h1>${done ? 'Сервер остановлен' : waiting ? 'Останавливаем сервер…' : 'Остановка не подтверждена'}</h1>
+    <p>${done ? 'Вкладку можно закрыть. Сохранённые результаты доступны после ручного запуска сервера.' : waiting ? 'Завершаем задачи, чаты и служебные процессы. Дождитесь подтверждения.' : 'Связь потеряна или завершение работы не подтверждено. Не считаем сервер остановленным. Проверьте его на компьютере.'}</p>
+    ${done ? '<button onclick="App.closeStoppedWindow()">Закрыть окно</button>' : !waiting ? '<button onclick="location.reload()">Проверить подключение</button>' : ''}
+    <p class="hint">${done ? 'Если браузер не разрешает закрыть вкладку, закройте её вручную.' : 'Автоматическое переподключение приостановлено.'}</p></div>`;
+}
+
+function closeStoppedWindow() {
+  if (S.shutdown !== 'stopped') return;
+  if (window.AgentPipelineAndroid?.closeWindow) window.AgentPipelineAndroid.closeWindow();
+  else window.close();
+}
+
+let shutdownMonitor = false;
+async function monitorShutdown(status) {
+  if (S.shutdown === 'stopped') return;
+  shutdownScreen(status);
+  if (status === 'stopped') { if (S.shutdownClose) closeStoppedWindow(); return; }
+  if (status !== 'stopping' || shutdownMonitor) return;
+  shutdownMonitor = true;
+  const deadline = Date.now() + 35000;
+  while (S.shutdown === 'stopping' && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    try {
+      const r = await fetch('/api/shutdown', {signal: AbortSignal.timeout(2000)});
+      const d = await r.json();
+      if (r.ok && d.boot_id === S.bootId && d.status !== 'stopping') { shutdownMonitor = false; return monitorShutdown(d.status); }
+    } catch { /* потеря соединения сама по себе не подтверждает остановку */ }
+  }
+  shutdownMonitor = false;
+  if (S.shutdown === 'stopping') shutdownScreen('unknown');
 }
 async function clearPause() { await api("POST", "/api/settings", { clear_pause: true }); await loadState(); renderSettings(); }
 
@@ -1190,7 +1281,7 @@ function bootChanged(id) {
 function setOffline(on) {
   const el = $("#offline");
   el.textContent = S.restarting || S.state?.pipeline?.restart ? "Трекер перезапускается…" : "Нет связи с трекером, переподключаюсь…";
-  el.classList.toggle("hidden", !on);
+  el.classList.toggle("hidden", !on || !!S.shutdown);
 }
 
 // ---------------- события сервера ----------------
@@ -1202,6 +1293,7 @@ const refreshChats = debounce(() => loadChats().catch(() => { }));
 
 // сверка с сервером; full — ещё чат и вопросы (после переподключения, когда события могли потеряться)
 async function resync(full) {
+  if (S.shutdown) return;
   await loadState().catch(() => { });
   loadBoard().catch(() => { }); refreshTask();
   if (full) { loadChat().catch(() => { }); refreshQuestions(); }
@@ -1210,6 +1302,8 @@ async function resync(full) {
 const resyncD = debounce(() => resync(), 300);
 
 function onEvent(m) {
+  if (m.type === 'shutdown') { monitorShutdown(m.status); return; }
+  if (S.shutdown) return;
   if (m.type === "resync") {
     setOffline(false); resync(true);
   } else if (m.type === "hello") {
@@ -1258,14 +1352,17 @@ function onEvent(m) {
 // Одно SSE-соединение на все вкладки: по HTTP/1.1 браузер держит к хосту ~6 соединений, и вкладки, у каждой из
 // которых свой EventSource, быстро их съедают. Сервер слушает вкладка, взявшая Web Lock, остальным пересылает
 // события через BroadcastChannel. Закрылась она — замок переходит к следующей.
+let eventStream;
 function connect() {
   const bc = window.BroadcastChannel && navigator.locks ? new BroadcastChannel("agentpipeline-events") : null;
   const listen = () => {
-    const es = new EventSource("/api/events");
+    if (S.shutdown) return;
+    const es = eventStream = new EventSource("/api/events");
     es.onmessage = e => { const m = JSON.parse(e.data); onEvent(m); bc?.postMessage(m); };
     // после (пере)подключения перечитываем всё во всех вкладках: пока связи не было, события терялись
     es.onopen = () => { setOffline(false); resync(true); bc?.postMessage({ type: "resync" }); };
     es.onerror = () => {
+      if (S.shutdown) { es.close(); return; }
       setOffline(true); bc?.postMessage({ type: "offline" });
       if (es.readyState === EventSource.CLOSED) setTimeout(listen, 3000);
     };
@@ -1324,6 +1421,7 @@ document.addEventListener("click", e => {
 });
 
 window.App = {
+  stopServer, confirmStopServer, closeStoppedWindow,
   loadResults, readResults, openResult, androidBack,
   moveTaskColumn,
   openOnboarding, onboardingMove, finishOnboarding,
@@ -1340,6 +1438,7 @@ window.App = {
 
 (async () => {
   await loadState();
+  if (S.state.shutdown && S.state.shutdown !== 'running') { monitorShutdown(S.state.shutdown); return; }
   render();
   if (new URLSearchParams(location.search).get("setup") === "telegram") openTelegramSettings();
   connect();  // подписываемся до загрузки доски и чата, чтобы не потерять события, пришедшие во время неё

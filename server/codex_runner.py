@@ -5,6 +5,7 @@ import queue
 import re
 import shutil
 import subprocess
+import runtime
 import sys
 import tempfile
 import threading
@@ -64,7 +65,7 @@ class Rpc:
         env = os.environ.copy()
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
             env.pop(key, None)
-        self.proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.proc = runtime.popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE, creationflags=NO_WINDOW,
                                      start_new_session=os.name != "nt")
         self.readers = [threading.Thread(target=self._errors, daemon=True), threading.Thread(target=self._read, daemon=True)]
