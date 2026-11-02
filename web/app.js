@@ -559,7 +559,7 @@ let onboardingStep = 0, onboardingActive = false;
 function renderWelcome() {
   const box = $("#welcome"), pending = S.state?.settings.onboarding_status === "pending";
   box.classList.toggle("hidden", !pending || onboardingActive || S.view === "onboarding");
-  box.innerHTML = pending ? `<span><b>Первый запуск?</b> Три коротких шага: работа с задачами, Git и Telegram. Интеграции необязательны.</span>
+  box.innerHTML = pending ? `<span><b>Первый запуск?</b> Три шага: трекер и доступ с телефона, Git, Telegram. Интеграции необязательны.</span>
     <div><button onclick="App.openOnboarding()">Открыть мастер</button><button class="ghost" onclick="App.finishOnboarding('skipped')">Пропустить мастер</button></div>` : "";
 }
 
@@ -596,7 +596,8 @@ function renderOnboarding() {
       : "Вход Claude Code на этом экране не проверялся."}
       <p class="hint">${codex ? "Codex CLI ≥ 0.166.0: codex login → ChatGPT." : "Claude Code: вход по подписке через claude."} Вход — на ПК с трекером; API-ключ не нужен. Исполнителя выбирает файл запуска.</p>
       ${p ? `Выбран проект «${esc(p.name)}»: <span class="onboarding-path">${esc(p.path)}</span>` : "Проект ещё не создан."}</div>
-    <button onclick="App.newProject()">${p ? "Добавить проект" : "Создать первый проект"}</button>`;
+    <button onclick="App.newProject()">${p ? "Добавить проект" : "Создать первый проект"}</button>
+    ${remoteAccessPanel()}`;
   const git = `<p>Коммит сохраняет изменения задачи в истории проекта. Push отправляет коммиты в удалённый репозиторий, например на GitHub.</p>
     <label for="onboarding-git-mode">Общий режим для проектов</label>
     <select id="onboarding-git-mode" onchange="App.setSetting('git_mode', this.value)">${opts([
@@ -649,6 +650,7 @@ function renderSettings() {
     <div class="section" id="onboarding-settings"><h3>Первое знакомство</h3>
       <p class="hint">Работа с задачами и необязательные интеграции. Просмотр шагов не подключает сервисы.</p>
       <button onclick="App.openOnboarding(${onboardingActive})">${onboardingActive ? "Вернуться к мастеру" : "Открыть мастер"}</button></div>
+    <div class="section" id="remote-settings"><h3>Доступ с телефона вне дома</h3>${remoteAccessPanel()}</div>
     <div class="section" id="telegram-settings"></div>
     <div class="section"><h3>Выключение пайплайна</h3>
       <label class="radio"><input type="radio" name="stop" value="graceful" ${s.stop_mode === "graceful" ? "checked" : ""} onchange="App.setSetting('stop_mode','graceful')">
@@ -1419,6 +1421,7 @@ window.App = {
   loadResults, readResults, openResult, androidBack,
   moveTaskColumn,
   openOnboarding, onboardingMove, finishOnboarding,
+  openRemoteSettings, checkRemoteAccess, copyRemoteAddress,
   setTelegramDefault, openTelegramSettings, telegramAction, setTaskTelegram, retryTelegram,
   taskModelChanged, setView, selectProject, newProject, createProject, pickFolder, updateProject, setProjectActive, deleteProject,
   discussResult, removeContext, openContextTask, dismissLostFiles,
@@ -1435,6 +1438,7 @@ window.App = {
   if (S.state.shutdown && S.state.shutdown !== 'running') { monitorShutdown(S.state.shutdown); return; }
   render();
   if (new URLSearchParams(location.search).get("setup") === "telegram") openTelegramSettings();
+  if (new URLSearchParams(location.search).get("setup") === "remote") openRemoteSettings();
   connect();  // подписываемся до загрузки доски и чата, чтобы не потерять события, пришедшие во время неё
   await loadBoard();
   loadResultBadge(); if (S.view === 'results') loadResults();

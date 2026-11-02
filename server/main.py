@@ -24,6 +24,7 @@ import pipeline as pl
 import results
 import discussions
 import folders
+import remote_access
 from runner import PORT, NO_WINDOW
 from updater import updater
 from git_readiness import check as check_git_readiness
@@ -55,6 +56,11 @@ def need(cond, msg="Не найдено", code=404):
 
 
 # ---------------- состояние ----------------
+@route("GET", "/api/remote-access")
+def api_remote_access(h, body, query):
+    return remote_access.check(PORT)
+
+
 def result_number(query, key, default=0):
     value = query.get(key, [str(default)])[0]
     need(value.isdecimal() and len(value) <= 18, f"Некорректный {key}", 400)
