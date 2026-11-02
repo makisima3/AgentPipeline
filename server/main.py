@@ -23,6 +23,7 @@ import db
 import pipeline as pl
 import results
 import discussions
+import folders
 from runner import PORT, NO_WINDOW
 from updater import updater
 from git_readiness import check as check_git_readiness
@@ -193,7 +194,7 @@ def api_git_readiness(h, body, query, pid):
 def api_project_create(h, body, query):
     name, path = (body.get("name") or "").strip(), (body.get("path") or "").strip().strip('"')
     need(name and path, "Нужны название и папка", 400)
-    need(Path(path).is_dir(), f"Папка не найдена: {path}", 400)
+    path = checked_project_path(path)
     pid = db.create_project(name, path, body.get("color") or "#6c8cff")
     pl.changed()
     return db.one("SELECT * FROM projects WHERE id=?", (pid,))
@@ -203,7 +204,7 @@ def api_project_create(h, body, query):
 def api_project_update(h, body, query, pid):
     fields = {k: body[k] for k in ("name", "path", "color", "active") if k in body}
     if "path" in fields:
-        need(Path(fields["path"]).is_dir(), f"Папка не найдена: {fields['path']}", 400)
+        fields["path"] = checked_project_path(fields["path"])
     if fields:
         db.ex(f"UPDATE projects SET {', '.join(k + '=?' for k in fields)} WHERE id=?", (*fields.values(), pid))
     pl.changed()
@@ -675,12 +676,20 @@ def api_telegram_retry(h, body, query, tid):
 
 
 # ---------------- служебное ----------------
-@route("POST", "/api/pick-folder")
-def api_pick_folder(h, body, query):
-    code = ("import tkinter as t, tkinter.filedialog as f; r=t.Tk(); r.withdraw(); r.attributes('-topmost', True); "
-            "print(f.askdirectory(title='Папка проекта') or '')")
-    out = runtime.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", creationflags=NO_WINDOW)
-    return {"path": str(Path(out.stdout.strip())) if out.stdout.strip() else ""}
+def checked_project_path(path):
+    try:
+        need(path is not None and path != "", "Нужна папка проекта", 400)
+        return folders.browse(path, check_only=True)["path"]
+    except folders.FolderError as e:
+        raise HttpError(e.code, str(e))
+
+
+@route("POST", "/api/folders")
+def api_folders(h, body, query):
+    try:
+        return folders.browse(body.get("path"))
+    except folders.FolderError as e:
+        raise HttpError(e.code, str(e))
 
 
 @route("POST", "/api/mcp/call")

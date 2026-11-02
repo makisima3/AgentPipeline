@@ -587,7 +587,8 @@ function renderOnboarding() {
   const p = project(), s = S.state.settings, step = onboardingStep;
   const titles = ["От задачи до результата", "Сохраняй изменения в Git", "Получай результаты в Telegram"];
   const codex = S.state.agent === "codex";
-  const intro = `<p>Проект — папка на ПК с трекером. Создай задачу с ожидаемым результатом, перенеси в «В работу» и включи пайплайн в шапке.</p>
+  const intro = `<p>Проект — папка на ПК с трекером. Кнопка «Обзор…» позволяет выбрать её с телефона: диски и каталоги ПК открываются здесь, без системного окна. Можно также ввести полный путь вручную.</p>
+    <p>Создай задачу с ожидаемым результатом, перенеси в «В работу» и включи пайплайн в шапке.</p>
     <p>В каждом проекте задачи нумеруются с #1; удалённые номера не повторяются. Для связи с другим проектом включи поиск во всех проектах и выбери задачу по названию проекта и номеру.</p>
     <p>Вопросы агента — во «Вопросах»: ответь, чтобы продолжить. Итог и отчёт — в карточке «Готово».</p>
     <div class="onboarding-status"><b>Исполнитель: ${esc(S.state.agent_name)}</b><br>${codex
@@ -998,15 +999,7 @@ function newProject() {
   setTimeout(() => $("#np-name").focus(), 0);
 }
 
-async function pickFolder(sel) {
-  toast("Открываю выбор папки…");
-  const r = await api("POST", "/api/pick-folder");
-  if (r.path) {
-    $(sel).value = r.path;
-    const name = $("#np-name");
-    if (name && !name.value) name.value = r.path.split(/[\\/]/).pop();
-  }
-}
+function pickFolder(sel) { FolderPicker.open($(sel)); }
 
 async function createProject() {
   const color = COLORS[(S.state.projects.length) % COLORS.length];
@@ -1412,7 +1405,8 @@ $("#chatFile").addEventListener("change", e => { addFiles(e.target.files); e.tar
 }
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
-  if ($("#modal").innerHTML) closeModal();
+  if (FolderPicker.isOpen()) FolderPicker.close();
+  else if ($("#modal").innerHTML) closeModal();
   else if (S.chatListOpen) { S.chatListOpen = false; renderChatHead(); }
 });
 // список чатов закрывается кликом мимо него

@@ -235,6 +235,21 @@ header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; back
 .overlay { position: fixed; inset: 0; background: var(--overlay); display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; z-index: 10; }
 .modal { background: var(--panel); border-radius: 14px; width: 100%; max-width: 760px; padding: 20px 22px; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
 .modal.wide { max-width: 980px; }
+.folder-picker { width: min(680px, calc(100% - 24px)); box-sizing: border-box; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text); }
+.folder-picker[open] { display: flex; flex-direction: column; gap: 10px; }
+.folder-picker::backdrop { background: var(--overlay); }
+.folder-picker h3, .folder-picker p { margin: 0; }
+.folder-picker .row { flex-shrink: 0; }
+.folder-picker input { min-width: 0; flex: 1; width: 0; font-size: 16px; }
+.folder-current { overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; max-height: 64px; overflow: auto; flex-shrink: 0; }
+.folder-list { min-height: 60px; height: 38vh; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 8px; }
+.folder-entry { display: block; width: 100%; min-height: 44px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.folder-entry::before { content: '▸ '; color: var(--muted); }
+.folder-picker .actions { display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+.folder-picker [hidden] { display: none; }
+.folder-picker.compact { padding: 12px; gap: 6px; }
+.folder-picker.compact p.hint, .folder-picker.compact .folder-current, .folder-picker.compact .folder-nav { display: none; }
+.folder-picker.compact .folder-list { min-height: 24px; height: 80px; }
 .modal h3 { margin: 0 0 4px; }
 .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
 .task-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
