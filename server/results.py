@@ -35,7 +35,8 @@ def prepare(t, summary, report, text=None, files=None):
         if not isinstance(files or [], list) or len(files or []) > 10:
             raise ValueError()
         total = 0
-        for i, name in enumerate(files or []):
+        for i, item in enumerate(files or []):
+            name, description = material(item)
             source = Path(name)
             if not source.is_absolute():
                 source = Path(t["project_path"]) / source
@@ -48,7 +49,7 @@ def prepare(t, summary, report, text=None, files=None):
             shutil.copyfile(source, target)
             materials.append({"name": source.name, "size": size,
                               "type": mimetypes.guess_type(source.name)[0] or "application/octet-stream",
-                              "path": target.relative_to(ROOT).as_posix()})
+                              "path": target.relative_to(ROOT).as_posix(), "description": description})
     except (OSError, ValueError, TypeError):
         # Даже недоступный материал не должен уничтожить итог и уже скопированные файлы.
         error = "Часть материалов не сохранена: исходный файл недоступен или превышен лимит."
@@ -57,6 +58,15 @@ def prepare(t, summary, report, text=None, files=None):
             "run_key": run_key(t), "summary": summary, "text": (text or summary).strip(), "report": report,
             "files": json.dumps(materials, ensure_ascii=False), "error": error, "created_at": db.now(),
             "description": t.get("description", ""), "status": "done"}
+
+
+def material(item):
+    """Строки прежних исполнителей совместимы; описание задаётся явно после просмотра файла."""
+    if isinstance(item, str):
+        return item, ""
+    if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("description", ""), str):
+        raise ValueError("Материал: путь и текстовое описание.")
+    return item["path"], item.get("description", "").strip()
 
 
 def save(row):

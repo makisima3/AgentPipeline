@@ -1,0 +1,68 @@
+async page => {
+  const base = new URL(page.url()).origin;
+  const info = await (await fetch(base + '/api/demo/info')).json();
+  const checks = {}, errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  await page.goto(base + `/?result_id=${info.result_id}`);
+  await page.locator('#modal .result-entry').waitFor();
+  const descriptions = page.locator('#modal .result-description');
+  assert(await descriptions.count() === 3, 'Потеряны пояснения');
+  assert((await descriptions.nth(0).textContent()).includes('Доска проекта:'), 'Пояснение первого снимка');
+  assert((await descriptions.nth(1).textContent()).includes('Чат проекта'), 'Порядок пояснений');
+  assert(await page.locator('#modal img').first().getAttribute('alt') === await descriptions.first().textContent(), 'Описание для доступности');
+  await page.waitForFunction(() => [...document.querySelectorAll('#modal img')].every(i => i.complete && i.naturalWidth > 0));
+  checks.descriptionsAndImages = true;
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Выход за ширину');
+    await page.screenshot({ path: `output/playwright/task-33/results-${width}.png` });
+  }
+  checks.responsive = true;
+  const downloadWait = page.waitForEvent('download');
+  await page.locator('#modal a[download]').first().click();
+  const download = await downloadWait;
+  assert(download.suggestedFilename() === 'board.png', 'Имя файла');
+  checks.download = true;
+  await page.getByRole('button', { name: 'Закрыть', exact: true }).click();
+  await page.locator('#view .result-description').first().waitFor();
+  checks.feed = true;
+  await page.context().setOffline(true);
+  await page.context().setOffline(false);
+  await page.reload();
+  await page.locator('#view .result-description').first().waitFor();
+  checks.reconnectAndReload = true;
+  await page.goto(base + '/api/demo/example');
+  await page.locator('.album img').first().waitFor();
+  await page.screenshot({ path: 'output/playwright/task-33/message-order-390.png', fullPage: true });
+  checks.messageOrderExample = true;
+  const { script } = await (await fetch(base + '/api/demo/album-check')).json();
+  const albumChecks = await page.evaluate(script => {
+    const check = (0, eval)('(' + script + ')');
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble is-read';
+    bubble.innerHTML = '<div class="grouped-item" data-mid="101" data-peer-id="1"></div><div class="grouped-item" data-mid="102" data-peer-id="1"></div>';
+    const messages = { 101: { grouped_id: 'album', pFlags: {} }, 102: { grouped_id: 'album', pFlags: {} } };
+    window.appImManager = { chat: { getMessageByPeer: (peer, mid) => messages[mid] } };
+    const tests = {};
+    tests.complete = check(bubble, 2);
+    messages[102].pFlags.is_outgoing = true;
+    tests.partialRejected = !check(bubble, 2);
+    delete messages[102].pFlags.is_outgoing;
+    messages[102].error = true;
+    tests.errorRejected = !check(bubble, 2);
+    delete messages[102].error;
+    messages[102].grouped_id = 'other';
+    tests.wrongAlbumRejected = !check(bubble, 2);
+    messages[102].grouped_id = 'album';
+    bubble.lastElementChild.remove();
+    tests.missingRejected = !check(bubble, 2);
+    delete window.appImManager;
+    tests.apiAbsentRejected = !check(bubble, 2);
+    return tests;
+  }, script);
+  assert(Object.values(albumChecks).every(Boolean), 'Неверное подтверждение альбома: ' + JSON.stringify(albumChecks));
+  checks.albumDOM = albumChecks;
+  assert(errors.length === 0, 'Ошибки JS: ' + errors.join('; '));
+  return checks;
+}

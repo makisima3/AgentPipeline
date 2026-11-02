@@ -24,6 +24,8 @@ INT = {"type": "integer"}
 TASK_ID_SCHEMA = {"type": "integer", "description": "Глобальный технический task_id (он же id), НЕ локальный task_number. Сначала получи его из list_tasks/create_task/get_task."}
 IDS = {"type": "array", "items": TASK_ID_SCHEMA, "description": "Глобальные технические task_id; не пользовательские номера."}
 BOOL = {"type": "boolean"}
+FILES = {"type": "array", "maxItems": 10, "items": {"oneOf": [STR, S({"path": STR, "description": STR}, ["path", "description"])]},
+         "description": "Пути или объекты {path, description}. Для скриншотов обязательно содержательное описание после просмотра изображения; не угадывай по имени файла."}
 
 APPROVE = {
     "name": "approve",
@@ -71,8 +73,8 @@ TASK_TOOLS = [
                        "что сделано и как, изменённые файлы, как проверить, принятые решения, открытые вопросы. "
                        "Всегда подготовь result_text и result_files: краткий итог и пути к материалам общей ленты, независимо от Telegram. "
                        "для визуальных изменений — скриншоты. Файлы копируются до выхода агента, доставляет сервер.",
-        "inputSchema": S({"summary": STR, "report": STR, "result_text": STR, "result_files": {"type": "array", "items": STR}, "telegram_text": STR,
-                          "telegram_files": {"type": "array", "items": STR}, "telegram_notify": BOOL}, ["summary", "report"]),
+        "inputSchema": S({"summary": STR, "report": STR, "result_text": STR, "result_files": FILES, "telegram_text": STR,
+                          "telegram_files": FILES, "telegram_notify": BOOL}, ["summary", "report"]),
     },
     CREATE_TASK,
     GET_TASK,

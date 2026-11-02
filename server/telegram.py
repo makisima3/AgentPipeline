@@ -1,7 +1,9 @@
 """Локальная очередь Telegram: снимки материалов, отдельные ошибки и один браузер за раз."""
 import json
+import mimetypes
 import os
 import signal
+import struct
 import shutil
 import subprocess
 import runtime
@@ -18,6 +20,88 @@ ROOT = db.DATA / "telegram"
 RESULTS = ROOT / "results"
 HELPER = db.ROOT / "tools" / "telegram_web.py"
 UNCERTAIN = "Подтверждение Telegram не получено. Проверьте Избранное перед повтором."
+
+
+def units(text):
+    return len(text.encode("utf-16-le")) // 2
+
+
+def split_text(text, limit):
+    """Сохраняем весь текст и Unicode, предпочитая границы абзацев и слов."""
+    chunks = []
+    while units(text) > limit:
+        end, size = 0, 0
+        for char in text:
+            size += units(char)
+            if size > limit:
+                break
+            end += 1
+        boundary = max(text.rfind("\n", 0, end), text.rfind(" ", 0, end))
+        if boundary > end // 2:
+            end = boundary + 1
+        chunks.append(text[:end])
+        text = text[end:]
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+def photo_supported(path):
+    """Консервативный допуск PNG/JPEG; неподходящие размеры/форматы идут документом."""
+    if path.stat().st_size > 10 * 1024**2:
+        return False
+    try:
+        with path.open("rb") as f:
+            head = f.read(24)
+            if path.suffix.lower() == ".png" and head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
+                w, h = struct.unpack(">II", head[16:24])
+            elif path.suffix.lower() in (".jpg", ".jpeg") and head[:2] == b"\xff\xd8":
+                f.seek(2)
+                while True:
+                    if f.read(1) != b"\xff":
+                        return False
+                    marker = f.read(1)
+                    while marker == b"\xff":
+                        marker = f.read(1)
+                    length = struct.unpack(">H", f.read(2))[0]
+                    if marker in (b"\xc0", b"\xc1", b"\xc2"):
+                        _, h, w = struct.unpack(">BHH", f.read(5))
+                        break
+                    if length < 2:
+                        return False
+                    f.seek(length - 2, 1)
+            else:
+                return False
+        return min(w, h) > 0 and w + h <= 10000 and max(w, h) / min(w, h) <= 20
+    except (OSError, struct.error):
+        return False
+
+
+def plan(report, materials, label=""):
+    """Одна часть — одно подтверждение, в том числе целого альбома; APK всегда последние."""
+    prefix = label + "\n\n" if label and units(label) <= 200 else ""
+    images = [m for m in materials if m["image"]]
+    others = [m for m in materials if not m["image"] and not m["apk"]]
+    apks = [m for m in materials if m["apk"]]
+    for i, m in enumerate(images, 1):
+        m["caption"] = f"Скрин {i} — {m['description'] or 'описание не предоставлено.'}"
+    compact = report + "\n\n" + "\n".join(m["caption"] for m in images)
+    if images and all(m["media"] for m in images) and units(compact) <= 900:
+        parts = [{"text": compact, "files": [m["path"] for m in images], "mode": "photo",
+                  "fallback": [{"text": report, "files": []}] +
+                    [{"text": prefix + m["caption"], "files": [m["path"]], "mode": "document"} for m in images]}]
+    else:
+        parts = [{"text": s, "files": []} for s in split_text(report, 3900)]
+        for number, m in enumerate(images, 1):
+            caption = split_text(prefix + m["caption"], 900)
+            parts.append({"text": caption[0], "files": [m["path"]], "mode": "photo" if m["media"] else "document"})
+            parts.extend({"text": f"Скрин {number} (продолжение)\n" + s, "files": []}
+                         for s in caption[1:])
+    for m in others + apks:
+        caption = split_text(prefix + ("APK — " if m["apk"] else "Материал — ") + (m["description"] or m["name"]), 900)
+        parts.append({"text": caption[0], "files": [m["path"]], "mode": "document"})
+        parts.extend({"text": "Пояснение (продолжение)\n" + s, "files": []} for s in caption[1:])
+    return parts
 
 
 def clear_qr():
@@ -51,13 +135,14 @@ def prepare(t, summary, text=None, files=None, staged=False):
     saved = results.existing(t)
     if saved:
         text = saved["text"]
-        files = [str(results.ROOT / f["path"]) for f in json.loads(saved["files"])]
+        files = [{"path": str(results.ROOT / f["path"]), "description": f.get("description", ""), "name": f["name"]}
+                 for f in json.loads(saved["files"])]
     token = uuid.uuid4().hex
     folder = RESULTS / token
     label = f"{t['project_name']} #{t['task_number']}"
     header = f"{label} · {t['title']}\n\n"
     body = (text or summary or "Задача выполнена.").strip()
-    parts = [{"text": (header + body)[:3500], "files": []}]
+    parts, materials = [], []
     error = None
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -66,7 +151,8 @@ def prepare(t, summary, text=None, files=None, staged=False):
         if not isinstance(files or [], list) or len(files or []) > 10:
             raise ValueError("Можно подготовить до 10 вложений.")
         total = 0
-        for i, name in enumerate(files or []):
+        for i, item in enumerate(files or []):
+            name, description = results.material(item)
             f = Path(name)
             if not f.is_absolute():
                 f = Path(t["project_path"]) / f
@@ -78,7 +164,12 @@ def prepare(t, summary, text=None, files=None, staged=False):
                 raise ValueError("Лимит материалов: 100 МБ на файл, 300 МБ суммарно.")
             target = folder / f"{i + 1}-{f.name}"
             shutil.copyfile(f, target)
-            parts.append({"text": f"{label} · {f.name}"[:800], "files": [target.relative_to(ROOT).as_posix()]})
+            original = item.get("name", f.name) if isinstance(item, dict) else f.name
+            materials.append({"name": original, "description": description,
+                              "path": target.relative_to(ROOT).as_posix(), "media": photo_supported(target),
+                              "image": (mimetypes.guess_type(original)[0] or "").startswith("image/"),
+                              "apk": Path(original).suffix.lower() == ".apk"})
+        parts = plan(header + body, materials, label)
     except (OSError, ValueError, TypeError):
         # Результат задачи остаётся успешным даже при потере исходного файла.
         error = "Не удалось сохранить вложения. Проверьте файлы и подготовьте материалы заново."
@@ -141,7 +232,7 @@ class Telegram:
             started = True
             out, _ = self.process.communicate(timeout=330)
             result = json.loads(out.decode("utf-8"))
-            if not isinstance(result, dict) or result.get("status") not in ("ready", "sent", "auth_required", "error", "uncertain"):
+            if not isinstance(result, dict) or result.get("status") not in ("ready", "sent", "auth_required", "error", "uncertain", "document_fallback"):
                 raise ValueError()
             return result
         except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -265,6 +356,17 @@ class Telegram:
             self._status(row["id"], "sending")
             result = self._call("send", part)
             status = result["status"]
+            if status == "document_fallback" and part.get("mode") == "photo" and parts[i].get("fallback"):
+                # Транспорт гарантирует отсутствие submit. Меняем только неподтверждённую
+                # часть, сохраняем новый план до первой отправки документов.
+                replacement = parts[i]["fallback"]
+                marker = parts[i]["text"].split("\n")[-1][:-1]
+                for j, item in enumerate(replacement, 1):
+                    item["text"] += f"\n\n{marker}d{j}]"
+                parts[i:i + 1] = replacement
+                db.ex("UPDATE telegram_deliveries SET payload=?,state='pending',updated_at=? WHERE id=?",
+                      (json.dumps(parts, ensure_ascii=False), db.now(), row["id"]))
+                return self._deliver(db.one("SELECT * FROM telegram_deliveries WHERE id=?", (row["id"],)))
             if status != "sent":
                 if status == "auth_required":
                     self.auth(status, result.get("error", "Требуется повторный вход."))

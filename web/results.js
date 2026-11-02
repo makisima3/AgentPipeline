@@ -38,10 +38,11 @@ async function loadResultBadge() {
 function resultFiles(r) {
   return r.files.map(f => {
     const url = esc(f.url), name = esc(f.name).replace(/"/g, '&quot;'), size = f.size < 1048576 ? `${Math.ceil(f.size / 1024)} КБ` : `${(f.size / 1048576).toFixed(1)} МБ`;
+    const description = esc(f.description || ''), accessible = description.replace(/"/g, '&quot;') || name;
     const preview = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(f.type)
-      ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" loading="lazy" alt="${name}"></a>`
+      ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" loading="lazy" alt="${accessible}"></a>`
       : ['video/mp4', 'video/webm'].includes(f.type) ? `<video controls preload="metadata" playsinline src="${url}" aria-label="${name}"></video>` : '';
-    return `<div class="result-file">${preview}<a href="${url}?download=1" download>${name}</a><small>${size} · скачать</small></div>`;
+    return `<div class="result-file">${preview}${description ? `<p class="result-description">${description}</p>` : ''}<a href="${url}?download=1" download>${name}</a><small>${size} · скачать</small></div>`;
   }).join('');
 }
 

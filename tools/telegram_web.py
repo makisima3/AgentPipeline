@@ -45,37 +45,83 @@ def open_saved(page):
     page.wait_for_timeout(1000)
 
 
-def wait_sent(page, marker):
+def wait_sent(page, marker, count=1):
     bubble = page.locator("#column-center .bubble").filter(has_text=marker).last
     bubble.wait_for(state="visible", timeout=30000)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         if bubble.evaluate("e => e.classList.contains('is-error')"):
             raise TelegramError("uncertain", "Telegram показал ошибку сообщения. Проверьте Избранное перед повтором.")
-        if not bubble.evaluate("e => e.classList.contains('is-sending')"):
+        if not bubble.evaluate("e => e.classList.contains('is-sending') || !!e.querySelector('.is-sending, .is-error')"):
             page.wait_for_timeout(1500)
-            if not bubble.evaluate("e => e.classList.contains('is-sending') || e.classList.contains('is-error')"):
+            if not bubble.evaluate("e => e.classList.contains('is-sending') || e.classList.contains('is-error') || !!e.querySelector('.is-sending, .is-error')"):
+                if count > 1:
+                    # Метка одного изображения не подтверждает весь альбом. Все элементы
+                    # должны иметь окончательные id и не содержать незавершённой загрузки.
+                    complete = bubble.evaluate("""(e, count) => {
+                        const items = [...e.querySelectorAll('.grouped-item[data-mid]')];
+                        const chat = window.appImManager?.chat;
+                        if (typeof chat?.getMessageByPeer !== 'function') return false;
+                        const messages = items.map(x => chat.getMessageByPeer(Number(x.dataset.peerId), Number(x.dataset.mid)));
+                        return items.length === count && new Set(items.map(x => x.dataset.mid)).size === count
+                          && messages.every(m => m && m.grouped_id && !m.pFlags?.is_outgoing && !m.pending && !m.error)
+                          && new Set(messages.map(m => m.grouped_id)).size === 1
+                          && (e.classList.contains('is-sent') || e.classList.contains('is-read'))
+                          && !e.querySelector('.preloader:not(.is-hidden), .is-uploading');
+                    }""", count)
+                    if not complete:
+                        page.wait_for_timeout(500)
+                        continue
                 return
         page.wait_for_timeout(500)
     raise TelegramError("uncertain", "Нет подтверждения Telegram. Проверьте Избранное перед повтором.")
 
 
+def upload(page, files, mode):
+    """Только подготовка: безопасный fallback возможен до нажатия «Отправить»."""
+    page.locator("#column-center .attach-file").first.click()
+    item = page.locator(".btn-menu-item").filter(has_text="Photo or Video" if mode == "photo" else "Document").first
+    with page.expect_file_chooser() as chooser:
+        item.click()
+    chooser.value.set_files(files)
+    popup = page.locator(".popup-new-media")
+    popup.wait_for(state="visible", timeout=30000)
+    if mode == "photo":
+        page.wait_for_function("""count => {
+            const p = document.querySelector('.popup-new-media');
+            return p && p.querySelectorAll('.popup-item-media').length === count;
+        }""", arg=len(files), timeout=30000)
+        if len(files) > 1 and popup.locator('.popup-item-album').count() != 1:
+            raise TelegramError("error", "Telegram не подготовил единый альбом.")
+    return popup
+
+
 def send(page, part, before_send):
     text, files = part.get("text", ""), part.get("files") or []
-    if not text or len(text) > (1000 if files else 4000):
+    if not text or len(text.encode("utf-16-le")) // 2 > (1024 if files else 4096) or len(files) > 10:
         raise TelegramError("error", "Некорректная длина сообщения Telegram.")
     for f in files:
         if not Path(f).is_file():
             raise TelegramError("error", "Сохранённое вложение недоступно.")
     marker = text.split("\n")[-1]
+    album_count = 1
     if files:
-        page.locator("#column-center .attach-file").first.click()
-        item = page.locator(".btn-menu-item").filter(has_text="Document").first
-        with page.expect_file_chooser() as chooser:
-            item.click()
-        chooser.value.set_files(files)
-        popup = page.locator(".popup-new-media")
-        popup.wait_for(state="visible", timeout=30000)
+        mode = part.get("mode", "document")
+        try:
+            popup = upload(page, files, mode)
+        except Exception:
+            if mode != "photo":
+                raise
+            # Для группы сервер сначала сохраняет новый план отдельных частей,
+            # чтобы квитанции документов не подменяли квитанцию целого альбома.
+            page.keyboard.press("Escape")
+            page.locator(".popup-new-media").wait_for(state="detached", timeout=10000)
+            if len(files) > 1:
+                raise TelegramError("document_fallback", "Медиа недоступно; подготовлена доставка с подписями документами.")
+            popup = upload(page, files, "document")
+        else:
+            if mode == "photo":
+                album_count = len(files)
         type_text(page, popup.locator(INPUT).first, text)
         before_send()
         popup.locator("button.btn-primary").first.click()
@@ -84,7 +130,7 @@ def send(page, part, before_send):
         type_text(page, page.locator(f"#column-center {INPUT}").first, text)
         before_send()
         page.keyboard.press("Enter")
-    wait_sent(page, marker)
+    wait_sent(page, marker, album_count)
 
 
 def run(args):

@@ -338,6 +338,7 @@ a.tref:hover { text-decoration: underline; }
 .result-file img, .result-file video { display: block; width: 100%; max-height: 380px; object-fit: contain; margin-bottom: 10px; background: var(--bg); border-radius: 4px; }
 .result-file > a { display: block; overflow-wrap: anywhere; }
 .result-file small { display: block; color: var(--muted); margin-top: 4px; }
+.result-description { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .result-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .results-empty { padding: 48px 0; max-width: 48ch; color: var(--muted); font-size: 16px; }
 .results-more { display: block; margin: 24px auto; }
